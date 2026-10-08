@@ -7,6 +7,37 @@ app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///school.db"
 db = SQLAlchemy(app)
 
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({
+        "error": "Resource not found"
+    }), 404
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({
+        "error": "Method not allowed"
+    }), 405
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    return jsonify({
+        "error": "Internal server error"
+    }), 500
+
+
+@app.route("/test-exception")
+def test_exception():
+    try:
+        number = 10 / 0
+        return jsonify({"number": number})
+
+    except ZeroDivisionError:
+        return jsonify({
+            "error": "You cannot divide by zero"
+        }), 400
+
 # USER MODEL
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
