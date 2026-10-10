@@ -1,10 +1,42 @@
-from flask import Flask, request, jsonify
+import os
+import bcrypt
 
+from datetime import timedelta
+from dotenv import load_dotenv
+
+from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 
+from flask_jwt_extended import (
+    JWTManager,
+    create_access_token,
+    jwt_required,
+    get_jwt_identity
+)
+
+# Create the Flask application
 app = Flask(__name__)
 
+# Load environment variables from the .env file
+load_dotenv()
+
+# Get the JWT secret from .env instead of hardcoding it here
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
+
+# Stop the application if the JWT secret is missing
+if not app.config["JWT_SECRET_KEY"]:
+    raise RuntimeError("JWT_SECRET_KEY is missing from the .env file")
+
+# Set access tokens to expire after 15 minutes
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=15)
+
+# Initialize JWT authentication for our Flask application
+jwt = JWTManager(app)
+
+# Configure SQLite as the database for our school portal
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///school.db"
+
+# Initialize SQLAlchemy so Flask can work with the database
 db = SQLAlchemy(app)
 
 
@@ -25,18 +57,6 @@ def internal_server_error(error):
     return jsonify({
         "error": "Internal server error"
     }), 500
-
-
-@app.route("/test-exception")
-def test_exception():
-    try:
-        number = 10 / 0
-        return jsonify({"number": number})
-
-    except ZeroDivisionError:
-        return jsonify({
-            "error": "You cannot divide by zero"
-        }), 400
 
 # USER MODEL
 class User(db.Model):
@@ -935,6 +955,142 @@ def delete_result(result_id):
     return jsonify({
         "message": "Result deleted successfully"
     })
+
+
+@app.route("/api/register", methods=["POST"])
+def register():
+    # Get the registration data sent by the user
+    data = request.get_json()
+
+    # Check that the request contains a JSON object
+    if not isinstance(data, dict):
+        return jsonify({
+            "error": "A valid JSON object is required"
+        }), 400
+
+    # Check that all required fields are present
+    required_fields = ["name", "email", "password"]
+
+    if not all(field in data for field in required_fields):
+        return jsonify({
+            "error": "Name, email, and password are required"
+        }), 400
+
+    # Check that each required field is a non-empty string
+    if not all(
+        isinstance(data[field], str) and data[field].strip()
+        for field in required_fields
+    ):
+        return jsonify({
+            "error": "Name, email, and password must be non-empty strings"
+        }), 400
+
+    # Remove unnecessary spaces and standardize the email
+    name = data["name"].strip()
+    email = data["email"].strip().lower()
+    password = data["password"]
+
+    # Check whether the email is already registered
+    existing_user = User.query.filter_by(email=email).first()
+
+    if existing_user:
+        return jsonify({
+            "error": "Email is already registered"
+        }), 409
+
+    # Convert the password into a secure hash
+    hashed_password = bcrypt.hashpw(
+        password.encode("utf-8"),
+        bcrypt.gensalt()
+    )
+
+    # Create a new user account
+    # Public registration only allows the student role
+    user = User(
+        name=name,
+        email=email,
+        password_hash=hashed_password.decode("utf-8"),
+        role="student"
+    )
+
+    # Add the user to the database and save the changes
+    db.session.add(user)
+    db.session.commit()
+
+    # Confirm successful registration
+    return jsonify({
+        "message": "Registration successful"
+    }), 201
+
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    # Get the login data sent by the user
+    data = request.get_json()
+
+    # Check that the required fields exist
+    if not data or not all(
+        field in data for field in ["email", "password"]
+    ):
+        return jsonify({
+            "error": "Email and password are required"
+        }), 400
+
+    # Check that the fields are not empty or whitespace
+    if not all(
+        isinstance(data[field], str) and data[field].strip()
+        for field in ["email", "password"]
+    ):
+        return jsonify({
+            "error": "Email and password cannot be empty"
+        }), 400
+
+    # Get the email and password entered during login
+    email = data["email"].strip()
+    password = data["password"]
+
+    # Find the user with this email
+    user = User.query.filter_by(email=email).first()
+
+    # Check if the user exists
+    if user is None:
+        return jsonify({
+            "error": "Invalid email or password"
+        }), 401
+
+    # Check whether the entered password matches the stored hash
+    password_correct = bcrypt.checkpw(
+        password.encode("utf-8"),
+        user.password_hash.encode("utf-8")
+    )
+
+    # If the password is correct, generate an access token
+    if password_correct:
+        access_token = create_access_token(
+            identity=str(user.id)
+        )
+
+        # Return the token to the client
+        return jsonify({
+            "message": "Login successful",
+            "access_token": access_token
+        }), 200
+
+    # Use the same error for an incorrect password
+    return jsonify({
+        "error": "Invalid email or password"
+    }), 401
+
+@app.route("/api/protected", methods=["GET"])
+@jwt_required()
+def protected():
+    # Get the ID of the user identified by the access token
+    current_user_id = get_jwt_identity()
+
+    return jsonify({
+        "message": "You have accessed a protected route",
+        "user_id": current_user_id
+    }), 200
 
 
 @app.route("/")
