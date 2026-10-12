@@ -178,30 +178,90 @@ class Result(db.Model):
 
 
     # ==================== USER CRUD ====================
-
-# CREATE USER
+# CREATE USER (ADMIN ONLY)
 @app.route("/api/users", methods=["POST"])
+@jwt_required()
 def create_user():
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
     data = request.get_json()
 
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
+
+    required_fields = ["name", "email", "password", "role"]
+
+    if not all(field in data for field in required_fields):
+        return jsonify({"error": "Name, email, password, and role are required"}), 400
+
+    if not all(
+        isinstance(data[field], str) and data[field].strip()
+        for field in required_fields
+    ):
+        return jsonify({"error": "All fields must be non-empty strings"}), 400
+
+    name = data["name"].strip()
+    email = data["email"].strip().lower()
+    password = data["password"]
+    role = data["role"].strip().lower()
+
+    if role not in ["student", "teacher"]:
+        return jsonify({"error": "Role must be student or teacher"}), 400
+
+    existing_user = User.query.filter_by(email=email).first()
+
+    if existing_user:
+        return jsonify({"error": "Email is already registered"}), 409
+
+    hashed_password = bcrypt.hashpw(
+        password.encode("utf-8"),
+        bcrypt.gensalt()
+    ).decode("utf-8")
+
     user = User(
-        name=data["name"],
-        email=data["email"],
-        password_hash=data["password_hash"],
-        role=data["role"]
+        name=name,
+        email=email,
+        password_hash=hashed_password,
+        role=role
     )
 
     db.session.add(user)
     db.session.commit()
 
     return jsonify({
-        "message": "User created successfully"
-    })
+        "message": f"{role.capitalize()} account created successfully"
+    }), 201
 
-
-# GET ALL USERS
+# GET ALL USERS (ADMIN ONLY)
 @app.route("/api/users", methods=["GET"])
+@jwt_required()
 def get_users():
+    # Get the ID of the authenticated user
+    current_user_id = get_jwt_identity()
+
+    # Find the user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    # Check whether the user exists
+    if current_user is None:
+        return jsonify({
+            "error": "User not found"
+        }), 404
+
+    # Check whether the user is an administrator
+    if current_user.role != "admin":
+        return jsonify({
+            "error": "Access forbidden"
+        }), 403
+
+    # Retrieve all users
     users = User.query.all()
     users_data = []
 
@@ -215,95 +275,287 @@ def get_users():
 
         users_data.append(user_data)
 
-    return jsonify(users_data)
+    return jsonify(users_data), 200
 
 
-# GET ONE USER
-@app.route("/api/users/<int:user_id>")
+# GET ONE USER (ADMIN ONLY)
+@app.route("/api/users/<int:user_id>", methods=["GET"])
+@jwt_required()  # Require a valid access token
 def get_user(user_id):
-    user = User.query.filter_by(id=user_id).first()
+
+    # 1. Identify the user making the request
+    current_user_id = get_jwt_identity()
+
+    # 2. Find the authenticated user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    # Reject the request if the authenticated user doesn't exist
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Only admins can view individual user accounts
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 4. Find the requested user
+    user = db.session.get(User, user_id)
 
     if user is None:
         return jsonify({
             "error": "User not found"
         }), 404
 
+    # 5. Return the user's public information
     return jsonify({
         "id": user.id,
         "name": user.name,
         "email": user.email,
         "role": user.role
-    })
+    }), 200
 
 
-# UPDATE USER
+
+# UPDATE USER (ADMIN ONLY)
 @app.route("/api/users/<int:user_id>", methods=["PUT"])
+@jwt_required()  # Require a valid access token
 def update_user(user_id):
-    user = User.query.filter_by(id=user_id).first()
+
+    # 1. Identify the user making the request
+    current_user_id = get_jwt_identity()
+
+    # 2. Find the authenticated user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    # Reject the request if the authenticated user no longer exists
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Only administrators can update user accounts
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 4. Find the account the admin wants to update
+    user = db.session.get(User, user_id)
 
     if user is None:
-        return jsonify({
-            "error": "User not found"
-        }), 404
+        return jsonify({"error": "User not found"}), 404
 
+    # 5. Read the incoming JSON request body
     data = request.get_json()
 
-    user.name = data["name"]
-    user.email = data["email"]
-    user.password_hash = data["password_hash"]
-    user.role = data["role"]
+    # Ensure the request contains a valid JSON object
+    if not isinstance(data, dict):
+        return jsonify({
+            "error": "A valid JSON object is required"
+        }), 400
 
+    # 6. Update the user's name if provided
+    if "name" in data:
+        if not isinstance(data["name"], str) or not data["name"].strip():
+            return jsonify({
+                "error": "Name must be a non-empty string"
+            }), 400
+
+        user.name = data["name"].strip()
+
+    # 7. Update the user's email if provided
+    if "email" in data:
+        if not isinstance(data["email"], str) or not data["email"].strip():
+            return jsonify({
+                "error": "Email must be a non-empty string"
+            }), 400
+
+        # Normalize the email to lowercase
+        email = data["email"].strip().lower()
+
+        # Check whether another user already has this email
+        existing_user = User.query.filter_by(email=email).first()
+
+        if existing_user and existing_user.id != user.id:
+            return jsonify({
+                "error": "Email is already registered"
+            }), 409
+
+        user.email = email
+
+    # 8. Update the password if provided
+    if "password" in data:
+        if not isinstance(data["password"], str) or not data["password"]:
+            return jsonify({
+                "error": "Password must be a non-empty string"
+            }), 400
+
+        # Hash the new password before storing it
+        hashed_password = bcrypt.hashpw(
+            data["password"].encode("utf-8"),
+            bcrypt.gensalt()
+        ).decode("utf-8")
+
+        user.password_hash = hashed_password
+
+    # 9. Update the user's role if provided
+    if "role" in data:
+        role = data["role"]
+
+        # Only allow student or teacher roles through this endpoint
+        if not isinstance(role, str) or role not in ["student", "teacher"]:
+            return jsonify({
+                "error": "Role must be student or teacher"
+            }), 400
+
+        user.role = role
+
+    # 10. Save the changes to the database
     db.session.commit()
 
+    # 11. Return a success response
     return jsonify({
         "message": "User updated successfully"
-    })
+    }), 200
 
-
-# DELETE USER
+# DELETE USER (ADMIN ONLY)
 @app.route("/api/users/<int:user_id>", methods=["DELETE"])
+@jwt_required()  # Require a valid access token
 def delete_user(user_id):
-    user = User.query.filter_by(id=user_id).first()
+
+    # 1. Identify the user making the request
+    current_user_id = get_jwt_identity()
+
+    # 2. Find the authenticated user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    # Reject the request if the authenticated user doesn't exist
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Only admins can delete user accounts
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 4. Find the account the admin wants to delete
+    user = db.session.get(User, user_id)
 
     if user is None:
-        return jsonify({
-            "error": "User not found"
-        }), 404
+        return jsonify({"error": "User not found"}), 404
 
+    # 5. Delete the account from the database
     db.session.delete(user)
     db.session.commit()
 
+    # 6. Confirm successful deletion
     return jsonify({
         "message": "User deleted successfully"
-    })
+    }), 200
 
 # ==================== STUDENT CRUD ====================
-
-# CREATE STUDENT
+# CREATE STUDENT (ADMIN ONLY)
 @app.route("/api/students", methods=["POST"])
+@jwt_required()  # Require a valid access token
 def create_student():
+
+    # 1. Identify the user making the request
+    current_user_id = get_jwt_identity()
+
+    # 2. Find the authenticated user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    # Reject the request if the user no longer exists
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Only admins can create student profiles
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 4. Read the incoming JSON data
     data = request.get_json()
 
+    # Ensure the request contains a valid JSON object
+    if not isinstance(data, dict):
+        return jsonify({
+            "error": "A valid JSON object is required"
+        }), 400
+
+    # 5. Check that all required fields are provided
+    required_fields = ["user_id", "admission_number", "class_id"]
+
+    if not all(field in data for field in required_fields):
+        return jsonify({
+            "error": "user_id, admission_number, and class_id are required"
+        }), 400
+
+    # 6. Validate the ID fields
+    if type(data["user_id"]) is not int or type(data["class_id"]) is not int:
+        return jsonify({
+            "error": "user_id and class_id must be integers"
+        }), 400
+
+    # Validate the admission number
+    if not isinstance(data["admission_number"], str) or not data["admission_number"].strip():
+        return jsonify({
+            "error": "Admission number must be a non-empty string"
+        }), 400
+
+    # 7. Check that the user account exists
+    user = db.session.get(User, data["user_id"])
+
+    if user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only accounts with the student role can have student profiles
+    if user.role != "student":
+        return jsonify({
+            "error": "The selected user must have the student role"
+        }), 400
+
+    # 8. Check that the class exists
+    school_class = db.session.get(Class, data["class_id"])
+
+    if school_class is None:
+        return jsonify({"error": "Class not found"}), 404
+
+    # 9. Create the student profile
     student = Student(
         user_id=data["user_id"],
-        admission_number=data["admission_number"],
+        admission_number=data["admission_number"].strip(),
         class_id=data["class_id"]
     )
 
     db.session.add(student)
     db.session.commit()
 
+    # 10. Confirm successful creation
     return jsonify({
         "message": "Student created successfully"
-    })
+    }), 201
 
 
-# GET ALL STUDENTS
+# GET ALL STUDENTS (ADMIN ONLY)
 @app.route("/api/students", methods=["GET"])
+@jwt_required()  # Require a valid access token
 def get_students():
+
+    # 1. Identify the user making the request
+    current_user_id = get_jwt_identity()
+
+    # 2. Find the authenticated user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    # Reject the request if the user no longer exists
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Only admins can view all student profiles
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 4. Retrieve all student profiles
     students = Student.query.all()
+
+    # Prepare a list to hold the student information
     students_data = []
 
+    # 5. Convert each student object into a dictionary
     for student in students:
         student_data = {
             "id": student.id,
@@ -314,595 +566,1724 @@ def get_students():
 
         students_data.append(student_data)
 
-    return jsonify(students_data)
+    # 6. Return the student list
+    return jsonify(students_data), 200
 
 
-# GET ONE STUDENT
-@app.route("/api/students/<int:student_id>")
+# GET ONE STUDENT (AUTHENTICATED USERS)
+@app.route("/api/students/<int:student_id>", methods=["GET"])
+@jwt_required()  # Require a valid access token
 def get_student(student_id):
-    student = Student.query.filter_by(id=student_id).first()
+
+    # 1. Identify the user making the request
+    current_user_id = get_jwt_identity()
+
+    # 2. Find the authenticated user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    # Reject the request if the user no longer exists
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Find the requested student profile
+    student = db.session.get(Student, student_id)
 
     if student is None:
         return jsonify({
             "error": "Student not found"
         }), 404
 
+    # 4. Only admins can view any student's profile
+    if current_user.role == "admin":
+        pass
+
+    # 5. Students can view only their own profile
+    elif current_user.role == "student":
+        if student.user_id != current_user.id:
+            return jsonify({
+                "error": "Access forbidden"
+            }), 403
+
+    # 6. Teachers cannot access student profiles through this endpoint yet
+    else:
+        return jsonify({
+            "error": "Access forbidden"
+        }), 403
+
+    # 7. Return the student's profile
     return jsonify({
         "id": student.id,
         "user_id": student.user_id,
         "admission_number": student.admission_number,
         "class_id": student.class_id
-    })
+    }), 200
 
-
-# UPDATE STUDENT
+# UPDATE STUDENT (ADMIN ONLY)
 @app.route("/api/students/<int:student_id>", methods=["PUT"])
+@jwt_required()
 def update_student(student_id):
-    student = Student.query.filter_by(id=student_id).first()
+    # 1. Identify the authenticated user
+    current_user_id = get_jwt_identity()
+
+    # 2. Find the user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Only admins can update student profiles
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 4. Find the student profile
+    student = db.session.get(Student, student_id)
 
     if student is None:
-        return jsonify({
-            "error": "Student not found"
-        }), 404
+        return jsonify({"error": "Student not found"}), 404
 
+    # 5. Read and validate the request body
     data = request.get_json()
 
-    student.admission_number = data["admission_number"]
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
+
+    required_fields = ["admission_number", "class_id"]
+
+    if not all(field in data for field in required_fields):
+        return jsonify({
+            "error": "admission_number and class_id are required"
+        }), 400
+
+    # 6. Validate the admission number
+    if (
+        not isinstance(data["admission_number"], str)
+        or not data["admission_number"].strip()
+    ):
+        return jsonify({
+            "error": "Admission number must be a non-empty string"
+        }), 400
+
+    # 7. Validate the class ID
+    if type(data["class_id"]) is not int:
+        return jsonify({
+            "error": "class_id must be an integer"
+        }), 400
+
+    # 8. Confirm that the requested class exists
+    school_class = db.session.get(Class, data["class_id"])
+
+    if school_class is None:
+        return jsonify({"error": "Class not found"}), 404
+
+    # 9. Update the student profile
+    student.admission_number = data["admission_number"].strip()
     student.class_id = data["class_id"]
 
+    # 10. Save the changes
     db.session.commit()
 
     return jsonify({
-        "message": "Student updated successfully"
-    })
+        "message": "Student updated successfully",
+        "student": {
+            "id": student.id,
+            "user_id": student.user_id,
+            "admission_number": student.admission_number,
+            "class_id": student.class_id
+        }
+    }), 200
 
-
-# DELETE STUDENT
+# DELETE STUDENT (ADMIN ONLY)
 @app.route("/api/students/<int:student_id>", methods=["DELETE"])
+@jwt_required()
 def delete_student(student_id):
-    student = Student.query.filter_by(id=student_id).first()
+    # 1. Identify the authenticated user
+    current_user_id = get_jwt_identity()
+
+    # 2. Find the user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Only admins can delete student profiles
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 4. Find the student profile
+    student = db.session.get(Student, student_id)
 
     if student is None:
-        return jsonify({
-            "error": "Student not found"
-        }), 404
+        return jsonify({"error": "Student not found"}), 404
 
+    # 5. Delete the student profile
     db.session.delete(student)
     db.session.commit()
 
     return jsonify({
         "message": "Student deleted successfully"
-    })
+    }), 200
 
 # ==================== CLASS CRUD ====================
-
-# CREATE CLASS
+# CREATE CLASS (ADMIN ONLY)
 @app.route("/api/class", methods=["POST"])
+@jwt_required()
 def create_class():
+    # 1. Identify the logged-in user
+    current_user_id = get_jwt_identity()
+
+    # 2. Find the user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Only admins can create classes
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 4. Read the request body
     data = request.get_json()
 
-    new_class = Class(
-        name=data["name"]
-    )
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
+
+    # 5. Validate the class name
+    name = data.get("name")
+
+    if not isinstance(name, str) or not name.strip():
+        return jsonify({"error": "A valid class name is required"}), 400
+
+    # 6. Create the class
+    new_class = Class(name=name.strip())
 
     db.session.add(new_class)
     db.session.commit()
 
+    # 7. Return the successful response
     return jsonify({
-        "message": "Class created successfully"
-    })
-
-
-# GET ALL CLASSES
-@app.route("/api/class", methods=["GET"])
-def get_classes():
-    classes = Class.query.all()
-    classes_data = []
-
-    for new_class in classes:
-        class_data = {
+        "message": "Class created successfully",
+        "class": {
             "id": new_class.id,
             "name": new_class.name
+        }
+    }), 201
+
+
+
+# GET ALL CLASSES (ADMIN ONLY)
+@app.route("/api/class", methods=["GET"])
+@jwt_required()
+def get_classes():
+    # 1. Identify the logged-in user
+    current_user_id = get_jwt_identity()
+
+    # 2. Find the user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Only admins can view all classes
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 4. Retrieve all classes
+    classes = Class.query.all()
+
+    # 5. Convert the classes into a list of dictionaries
+    classes_data = []
+
+    for school_class in classes:
+        class_data = {
+            "id": school_class.id,
+            "name": school_class.name
         }
 
         classes_data.append(class_data)
 
-    return jsonify(classes_data)
+    # 6. Return the list of classes
+    return jsonify(classes_data), 200
 
-
-# GET ONE CLASS
-@app.route("/api/class/<int:class_id>")
+# GET ONE CLASS (ADMIN, ASSIGNED TEACHER, OR STUDENT IN THAT CLASS)
+@app.route("/api/class/<int:class_id>", methods=["GET"])
+@jwt_required()
 def get_class(class_id):
-    new_class = Class.query.filter_by(id=class_id).first()
 
-    if new_class is None:
-        return jsonify({
-            "error": "Class not found"
-        }), 404
+    # 1. Identify the logged-in user
+    current_user_id = get_jwt_identity()
 
+    # 2. Find the user in the database
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Find the requested class
+    school_class = db.session.get(Class, class_id)
+
+    if school_class is None:
+        return jsonify({"error": "Class not found"}), 404
+
+    # 4. Admins can view any class
+    if current_user.role == "admin":
+        pass
+
+    # 5. Students can view only their own class
+    elif current_user.role == "student":
+
+        student = Student.query.filter_by(
+            user_id=current_user.id
+        ).first()
+
+        if student is None:
+            return jsonify({
+                "error": "Student profile not found"
+            }), 404
+
+        if student.class_id != school_class.id:
+            return jsonify({
+                "error": "You can only view your own class"
+            }), 403
+
+    # 6. Teachers can view only classes assigned to them
+    elif current_user.role == "teacher":
+
+        teacher = Teacher.query.filter_by(
+            user_id=current_user.id
+        ).first()
+
+        if teacher is None:
+            return jsonify({
+                "error": "Teacher profile not found"
+            }), 404
+
+        assignment = TeachingAssignment.query.filter_by(
+            teacher_id=teacher.id,
+            class_id=school_class.id
+        ).first()
+
+        if assignment is None:
+            return jsonify({
+                "error": "You are not assigned to this class"
+            }), 403
+
+    # 7. Reject any unrecognized role
+    else:
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 8. Return the class details
     return jsonify({
-        "id": new_class.id,
-        "name": new_class.name
-    })
+        "id": school_class.id,
+        "name": school_class.name
+    }), 200
 
-
-# UPDATE CLASS
+# UPDATE CLASS (ADMIN ONLY)
 @app.route("/api/class/<int:class_id>", methods=["PUT"])
+@jwt_required()
 def update_class(class_id):
-    new_class = Class.query.filter_by(id=class_id).first()
+    # 1. Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    # 2. Find the user in the database
+    current_user = db.session.get(User, current_user_id)
 
-    if new_class is None:
-        return jsonify({
-            "error": "Class not found"
-        }), 404
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
 
+    # 3. Only admins can update classes
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 4. Find the class to update
+    school_class = db.session.get(Class, class_id)
+
+    if school_class is None:
+        return jsonify({"error": "Class not found"}), 404
+
+    # 5. Read and validate the request body
     data = request.get_json()
 
-    new_class.name = data["name"]
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
 
+    name = data.get("name")
+
+    if not isinstance(name, str) or not name.strip():
+        return jsonify({"error": "A valid class name is required"}), 400
+
+    # 6. Update the class name
+    school_class.name = name.strip()
+
+    # 7. Save the changes
     db.session.commit()
 
     return jsonify({
-        "message": "Class updated successfully"
-    })
+        "message": "Class updated successfully",
+        "class": {
+            "id": school_class.id,
+            "name": school_class.name
+        }
+    }), 200
 
-
-# DELETE CLASS
+# DELETE CLASS (ADMIN ONLY)
 @app.route("/api/class/<int:class_id>", methods=["DELETE"])
+@jwt_required()
 def delete_class(class_id):
-    new_class = Class.query.filter_by(id=class_id).first()
+    # 1. Identify the logged-in user
+    current_user_id = get_jwt_identity()
 
-    if new_class is None:
-        return jsonify({
-            "error": "Class not found"
-        }), 404
+    # 2. Find the user in the database
+    current_user = db.session.get(User, current_user_id)
 
-    db.session.delete(new_class)
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 3. Only admins can delete classes
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 4. Find the class to delete
+    school_class = db.session.get(Class, class_id)
+
+    if school_class is None:
+        return jsonify({"error": "Class not found"}), 404
+
+    # 5. Delete the class
+    db.session.delete(school_class)
     db.session.commit()
 
     return jsonify({
         "message": "Class deleted successfully"
-    })
+    }), 200
 
 # ==================== TEACHER CRUD ====================
-
-# CREATE TEACHER
+# CREATE TEACHER (ADMIN ONLY)
 @app.route("/api/teachers", methods=["POST"])
+@jwt_required()
 def create_teacher():
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can create teacher profiles
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Validate request data
     data = request.get_json()
 
-    teacher = Teacher(
-        user_id=data["user_id"]
-    )
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
+
+    user_id = data.get("user_id")
+
+    if type(user_id) is not int:
+        return jsonify({"error": "user_id must be an integer"}), 400
+
+    # Find the associated User account
+    user = db.session.get(User, user_id)
+
+    if user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    if user.role != "teacher":
+        return jsonify({
+            "error": "The selected user must have the teacher role"
+        }), 400
+
+    # Prevent duplicate teacher profiles
+    existing_teacher = Teacher.query.filter_by(user_id=user_id).first()
+
+    if existing_teacher is not None:
+        return jsonify({
+            "error": "This user already has a teacher profile"
+        }), 409
+
+    # Create the teacher profile
+    teacher = Teacher(user_id=user_id)
 
     db.session.add(teacher)
     db.session.commit()
 
     return jsonify({
-        "message": "Teacher created successfully"
-    })
-
-
-# GET ALL TEACHERS
-@app.route("/api/teachers", methods=["GET"])
-def get_teachers():
-    teachers = Teacher.query.all()
-    teachers_data = []
-
-    for teacher in teachers:
-        teacher_data = {
+        "message": "Teacher created successfully",
+        "teacher": {
             "id": teacher.id,
             "user_id": teacher.user_id
         }
+    }), 201
 
-        teachers_data.append(teacher_data)
+# GET ALL TEACHERS (ADMIN ONLY)
+@app.route("/api/teachers", methods=["GET"])
+@jwt_required()
+def get_teachers():
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
 
-    return jsonify(teachers_data)
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can view all teacher profiles
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Retrieve all teacher profiles
+    teachers = Teacher.query.all()
+
+    teachers_data = []
+
+    for teacher in teachers:
+        teachers_data.append({
+            "id": teacher.id,
+            "user_id": teacher.user_id
+        })
+
+    return jsonify(teachers_data), 200
 
 
-# GET ONE TEACHER
-@app.route("/api/teachers/<int:teacher_id>")
+# GET ONE TEACHER (ADMIN ONLY)
+@app.route("/api/teachers/<int:teacher_id>", methods=["GET"])
+@jwt_required()
 def get_teacher(teacher_id):
-    teacher = Teacher.query.filter_by(id=teacher_id).first()
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can view teacher profiles through this endpoint
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the requested teacher
+    teacher = db.session.get(Teacher, teacher_id)
 
     if teacher is None:
-        return jsonify({
-            "error": "Teacher not found"
-        }), 404
+        return jsonify({"error": "Teacher not found"}), 404
 
     return jsonify({
         "id": teacher.id,
         "user_id": teacher.user_id
-    })
+    }), 200
 
 
-# UPDATE TEACHER
+# UPDATE TEACHER (ADMIN ONLY)
 @app.route("/api/teachers/<int:teacher_id>", methods=["PUT"])
+@jwt_required()
 def update_teacher(teacher_id):
-    teacher = Teacher.query.filter_by(id=teacher_id).first()
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can update teacher profiles
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the teacher profile
+    teacher = db.session.get(Teacher, teacher_id)
 
     if teacher is None:
-        return jsonify({
-            "error": "Teacher not found"
-        }), 404
+        return jsonify({"error": "Teacher not found"}), 404
 
+    # Validate request data
     data = request.get_json()
 
-    teacher.user_id = data["user_id"]
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
+
+    user_id = data.get("user_id")
+
+    if type(user_id) is not int:
+        return jsonify({"error": "user_id must be an integer"}), 400
+
+    # Find the replacement User account
+    user = db.session.get(User, user_id)
+
+    if user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    if user.role != "teacher":
+        return jsonify({
+            "error": "The selected user must have the teacher role"
+        }), 400
+
+    # Prevent assigning the same User account to another teacher profile
+    existing_teacher = Teacher.query.filter_by(user_id=user_id).first()
+
+    if existing_teacher is not None and existing_teacher.id != teacher.id:
+        return jsonify({
+            "error": "This user already has a teacher profile"
+        }), 409
+
+    # Update the teacher profile
+    teacher.user_id = user_id
 
     db.session.commit()
 
     return jsonify({
-        "message": "Teacher updated successfully"
-    })
+        "message": "Teacher updated successfully",
+        "teacher": {
+            "id": teacher.id,
+            "user_id": teacher.user_id
+        }
+    }), 200
 
 
-# DELETE TEACHER
+# DELETE TEACHER (ADMIN ONLY)
 @app.route("/api/teachers/<int:teacher_id>", methods=["DELETE"])
+@jwt_required()
 def delete_teacher(teacher_id):
-    teacher = Teacher.query.filter_by(id=teacher_id).first()
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can delete teacher profiles
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the teacher profile
+    teacher = db.session.get(Teacher, teacher_id)
 
     if teacher is None:
-        return jsonify({
-            "error": "Teacher not found"
-        }), 404
+        return jsonify({"error": "Teacher not found"}), 404
 
+    # Delete the teacher profile
     db.session.delete(teacher)
     db.session.commit()
 
     return jsonify({
         "message": "Teacher deleted successfully"
-    })
+    }), 200
 
-# ==================== SUBJECT CRUD ====================
+# ==================== CREATE SUBJECT (ADMIN ONLY) ====================
 
-# CREATE SUBJECT
 @app.route("/api/subjects", methods=["POST"])
+@jwt_required()
 def create_subject():
+    # Identify the currently logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    # Check whether the user exists
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can create subjects
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Read and validate the JSON request body
     data = request.get_json()
 
-    subject = Subject(
-        name=data["name"]
-    )
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
 
-    db.session.add(subject)
+    name = data.get("name")
+
+    if not isinstance(name, str) or not name.strip():
+        return jsonify({"error": "A valid subject name is required"}), 400
+
+    # Create the subject
+    new_subject = Subject(name=name.strip())
+
+    db.session.add(new_subject)
     db.session.commit()
 
     return jsonify({
-        "message": "Subject created successfully"
-    })
+        "message": "Subject created successfully",
+        "subject": {
+            "id": new_subject.id,
+            "name": new_subject.name
+        }
+    }), 201
 
+# ==================== GET ALL SUBJECTS ====================
 
-# GET ALL SUBJECTS
 @app.route("/api/subjects", methods=["GET"])
+@jwt_required()
 def get_subjects():
-    subjects = Subject.query.all()
-    subjects_data = []
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
 
-    for subject in subjects:
-        subject_data = {
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Admins can view all subjects
+    if current_user.role == "admin":
+        subjects = Subject.query.all()
+
+    # Students can view subjects taught to their class
+    elif current_user.role == "student":
+        student = Student.query.filter_by(
+            user_id=current_user.id
+        ).first()
+
+        if student is None:
+            return jsonify({
+                "error": "Student profile not found"
+            }), 404
+
+        assignments = TeachingAssignment.query.filter_by(
+            class_id=student.class_id
+        ).all()
+
+        subject_ids = {
+            assignment.subject_id for assignment in assignments
+        }
+
+        subjects = Subject.query.filter(
+            Subject.id.in_(subject_ids)
+        ).all()
+
+    # Teachers can view subjects assigned to them
+    elif current_user.role == "teacher":
+        teacher = Teacher.query.filter_by(
+            user_id=current_user.id
+        ).first()
+
+        if teacher is None:
+            return jsonify({
+                "error": "Teacher profile not found"
+            }), 404
+
+        assignments = TeachingAssignment.query.filter_by(
+            teacher_id=teacher.id
+        ).all()
+
+        subject_ids = {
+            assignment.subject_id for assignment in assignments
+        }
+
+        subjects = Subject.query.filter(
+            Subject.id.in_(subject_ids)
+        ).all()
+
+    else:
+        return jsonify({"error": "Access forbidden"}), 403
+
+    subjects_data = [
+        {
             "id": subject.id,
             "name": subject.name
         }
+        for subject in subjects
+    ]
 
-        subjects_data.append(subject_data)
-
-    return jsonify(subjects_data)
+    return jsonify(subjects_data), 200
 
 
-# GET ONE SUBJECT
-@app.route("/api/subjects/<int:subject_id>")
+# ==================== GET ONE SUBJECT ====================
+
+@app.route("/api/subjects/<int:subject_id>", methods=["GET"])
+@jwt_required()
 def get_subject(subject_id):
-    subject = Subject.query.filter_by(id=subject_id).first()
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    subject = db.session.get(Subject, subject_id)
 
     if subject is None:
-        return jsonify({
-            "error": "Subject not found"
-        }), 404
+        return jsonify({"error": "Subject not found"}), 404
+
+    # Admins can view any subject
+    if current_user.role == "admin":
+        pass
+
+    # Students can view subjects assigned to their class
+    elif current_user.role == "student":
+        student = Student.query.filter_by(
+            user_id=current_user.id
+        ).first()
+
+        if student is None:
+            return jsonify({
+                "error": "Student profile not found"
+            }), 404
+
+        assignment = TeachingAssignment.query.filter_by(
+            class_id=student.class_id,
+            subject_id=subject.id
+        ).first()
+
+        if assignment is None:
+            return jsonify({
+                "error": "This subject is not assigned to your class"
+            }), 403
+
+    # Teachers can view subjects assigned to them
+    elif current_user.role == "teacher":
+        teacher = Teacher.query.filter_by(
+            user_id=current_user.id
+        ).first()
+
+        if teacher is None:
+            return jsonify({
+                "error": "Teacher profile not found"
+            }), 404
+
+        assignment = TeachingAssignment.query.filter_by(
+            teacher_id=teacher.id,
+            subject_id=subject.id
+        ).first()
+
+        if assignment is None:
+            return jsonify({
+                "error": "You are not assigned to this subject"
+            }), 403
+
+    else:
+        return jsonify({"error": "Access forbidden"}), 403
 
     return jsonify({
         "id": subject.id,
         "name": subject.name
-    })
+    }), 200
 
 
-# UPDATE SUBJECT
+# ==================== UPDATE SUBJECT (ADMIN ONLY) ====================
+
 @app.route("/api/subjects/<int:subject_id>", methods=["PUT"])
+@jwt_required()
 def update_subject(subject_id):
-    subject = Subject.query.filter_by(id=subject_id).first()
+    # Identify the currently logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can update subjects
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the subject
+    subject = db.session.get(Subject, subject_id)
 
     if subject is None:
-        return jsonify({
-            "error": "Subject not found"
-        }), 404
+        return jsonify({"error": "Subject not found"}), 404
 
+    # Validate the request body
     data = request.get_json()
 
-    subject.name = data["name"]
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
+
+    name = data.get("name")
+
+    if not isinstance(name, str) or not name.strip():
+        return jsonify({"error": "A valid subject name is required"}), 400
+
+    # Update the subject
+    subject.name = name.strip()
 
     db.session.commit()
 
     return jsonify({
-        "message": "Subject updated successfully"
-    })
+        "message": "Subject updated successfully",
+        "subject": {
+            "id": subject.id,
+            "name": subject.name
+        }
+    }), 200
 
 
-# DELETE SUBJECT
+# ==================== DELETE SUBJECT (ADMIN ONLY) ====================
+
 @app.route("/api/subjects/<int:subject_id>", methods=["DELETE"])
+@jwt_required()
 def delete_subject(subject_id):
-    subject = Subject.query.filter_by(id=subject_id).first()
+    # Identify the currently logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can delete subjects
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the subject
+    subject = db.session.get(Subject, subject_id)
 
     if subject is None:
-        return jsonify({
-            "error": "Subject not found"
-        }), 404
+        return jsonify({"error": "Subject not found"}), 404
 
+    # Delete the subject
     db.session.delete(subject)
     db.session.commit()
 
     return jsonify({
         "message": "Subject deleted successfully"
-    })
+    }), 200
 
 
-# ==================== TEACHING ASSIGNMENT CRUD ====================
+# ==================== CREATE TEACHING ASSIGNMENT (ADMIN ONLY) ====================
 
-# CREATE TEACHING ASSIGNMENT
 @app.route("/api/teaching-assignments", methods=["POST"])
+@jwt_required()
 def create_teaching_assignment():
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can create teaching assignments
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Validate the request body
     data = request.get_json()
 
-    teaching_assignment = TeachingAssignment(
-        teacher_id=data["teacher_id"],
-        class_id=data["class_id"],
-        subject_id=data["subject_id"]
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
+
+    teacher_id = data.get("teacher_id")
+    class_id = data.get("class_id")
+    subject_id = data.get("subject_id")
+
+    # Validate the IDs
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in (teacher_id, class_id, subject_id)
+    ):
+        return jsonify({
+            "error": "teacher_id, class_id, and subject_id must be positive integers"
+        }), 400
+
+    # Check that the teacher profile exists
+    teacher = db.session.get(Teacher, teacher_id)
+
+    if teacher is None:
+        return jsonify({"error": "Teacher not found"}), 404
+
+    # Check that the class exists
+    school_class = db.session.get(Class, class_id)
+
+    if school_class is None:
+        return jsonify({"error": "Class not found"}), 404
+
+    # Check that the subject exists
+    subject = db.session.get(Subject, subject_id)
+
+    if subject is None:
+        return jsonify({"error": "Subject not found"}), 404
+
+    # Prevent duplicate assignments for the same teacher, class, and subject
+    existing_assignment = TeachingAssignment.query.filter_by(
+        teacher_id=teacher_id,
+        class_id=class_id,
+        subject_id=subject_id
+    ).first()
+
+    if existing_assignment is not None:
+        return jsonify({
+            "error": "This teaching assignment already exists"
+        }), 409
+
+    # Create the assignment
+    new_assignment = TeachingAssignment(
+        teacher_id=teacher_id,
+        class_id=class_id,
+        subject_id=subject_id
     )
 
-    db.session.add(teaching_assignment)
+    db.session.add(new_assignment)
     db.session.commit()
 
     return jsonify({
-        "message": "Teaching assignment created successfully"
-    })
-
-
-# GET ALL TEACHING ASSIGNMENTS
-@app.route("/api/teaching-assignments")
-def get_teaching_assignments():
-    teaching_assignments = TeachingAssignment.query.all()
-    teaching_assignments_data = []
-
-    for teaching_assignment in teaching_assignments:
-        teaching_assignment_data = {
-            "id": teaching_assignment.id,
-            "teacher_id": teaching_assignment.teacher_id,
-            "class_id": teaching_assignment.class_id,
-            "subject_id": teaching_assignment.subject_id
+        "message": "Teaching assignment created successfully",
+        "teaching_assignment": {
+            "id": new_assignment.id,
+            "teacher_id": new_assignment.teacher_id,
+            "class_id": new_assignment.class_id,
+            "subject_id": new_assignment.subject_id
         }
-
-        teaching_assignments_data.append(teaching_assignment_data)
-
-    return jsonify(teaching_assignments_data)
+    }), 201
 
 
-# GET ONE TEACHING ASSIGNMENT
-@app.route("/api/teaching-assignments/<int:teaching_assignment_id>")
+# ==================== GET ALL TEACHING ASSIGNMENTS (ADMIN ONLY) ====================
+
+@app.route("/api/teaching-assignments", methods=["GET"])
+@jwt_required()
+def get_teaching_assignments():
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can view all teaching assignments
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Retrieve all assignments
+    teaching_assignments = TeachingAssignment.query.all()
+
+    assignments_data = []
+
+    for assignment in teaching_assignments:
+        assignments_data.append({
+            "id": assignment.id,
+            "teacher_id": assignment.teacher_id,
+            "class_id": assignment.class_id,
+            "subject_id": assignment.subject_id
+        })
+
+    return jsonify(assignments_data), 200
+
+
+# ==================== GET ONE TEACHING ASSIGNMENT (ADMIN ONLY) ====================
+
+@app.route(
+    "/api/teaching-assignments/<int:teaching_assignment_id>",
+    methods=["GET"]
+)
+@jwt_required()
 def get_teaching_assignment(teaching_assignment_id):
-    teaching_assignment = TeachingAssignment.query.filter_by(
-        id=teaching_assignment_id
-    ).first()
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
 
-    if teaching_assignment is None:
-        return jsonify({
-            "error": "Teaching assignment not found"
-        }), 404
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can view individual assignments through this endpoint
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the assignment
+    assignment = db.session.get(
+        TeachingAssignment,
+        teaching_assignment_id
+    )
+
+    if assignment is None:
+        return jsonify({"error": "Teaching assignment not found"}), 404
 
     return jsonify({
-        "id": teaching_assignment.id,
-        "teacher_id": teaching_assignment.teacher_id,
-        "class_id": teaching_assignment.class_id,
-        "subject_id": teaching_assignment.subject_id
-    })
+        "id": assignment.id,
+        "teacher_id": assignment.teacher_id,
+        "class_id": assignment.class_id,
+        "subject_id": assignment.subject_id
+    }), 200
 
 
-# UPDATE TEACHING ASSIGNMENT
-@app.route("/api/teaching-assignments/<int:teaching_assignment_id>", methods=["PUT"])
+# ==================== UPDATE TEACHING ASSIGNMENT (ADMIN ONLY) ====================
+
+@app.route(
+    "/api/teaching-assignments/<int:teaching_assignment_id>",
+    methods=["PUT"]
+)
+@jwt_required()
 def update_teaching_assignment(teaching_assignment_id):
-    teaching_assignment = TeachingAssignment.query.filter_by(
-        id=teaching_assignment_id
-    ).first()
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
 
-    if teaching_assignment is None:
-        return jsonify({
-            "error": "Teaching assignment not found"
-        }), 404
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
 
+    # Only admins can update teaching assignments
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the assignment
+    assignment = db.session.get(
+        TeachingAssignment,
+        teaching_assignment_id
+    )
+
+    if assignment is None:
+        return jsonify({"error": "Teaching assignment not found"}), 404
+
+    # Validate the request body
     data = request.get_json()
 
-    teaching_assignment.teacher_id = data["teacher_id"]
-    teaching_assignment.class_id = data["class_id"]
-    teaching_assignment.subject_id = data["subject_id"]
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
+
+    teacher_id = data.get("teacher_id")
+    class_id = data.get("class_id")
+    subject_id = data.get("subject_id")
+
+    # All three fields are required for this PUT request
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in (teacher_id, class_id, subject_id)
+    ):
+        return jsonify({
+            "error": "teacher_id, class_id, and subject_id must be positive integers"
+        }), 400
+
+    # Verify the teacher profile
+    teacher = db.session.get(Teacher, teacher_id)
+
+    if teacher is None:
+        return jsonify({"error": "Teacher not found"}), 404
+
+    # Verify the class
+    school_class = db.session.get(Class, class_id)
+
+    if school_class is None:
+        return jsonify({"error": "Class not found"}), 404
+
+    # Verify the subject
+    subject = db.session.get(Subject, subject_id)
+
+    if subject is None:
+        return jsonify({"error": "Subject not found"}), 404
+
+    # Prevent duplicate assignments, excluding this assignment itself
+    duplicate = TeachingAssignment.query.filter_by(
+        teacher_id=teacher_id,
+        class_id=class_id,
+        subject_id=subject_id
+    ).filter(
+        TeachingAssignment.id != assignment.id
+    ).first()
+
+    if duplicate is not None:
+        return jsonify({
+            "error": "This teaching assignment already exists"
+        }), 409
+
+    # Update the assignment
+    assignment.teacher_id = teacher_id
+    assignment.class_id = class_id
+    assignment.subject_id = subject_id
 
     db.session.commit()
 
     return jsonify({
-        "message": "Teaching assignment updated successfully"
-    })
+        "message": "Teaching assignment updated successfully",
+        "teaching_assignment": {
+            "id": assignment.id,
+            "teacher_id": assignment.teacher_id,
+            "class_id": assignment.class_id,
+            "subject_id": assignment.subject_id
+        }
+    }), 200
 
 
-# DELETE TEACHING ASSIGNMENT
-@app.route("/api/teaching-assignments/<int:teaching_assignment_id>", methods=["DELETE"])
+# ==================== DELETE TEACHING ASSIGNMENT (ADMIN ONLY) ====================
+
+@app.route(
+    "/api/teaching-assignments/<int:teaching_assignment_id>",
+    methods=["DELETE"]
+)
+@jwt_required()
 def delete_teaching_assignment(teaching_assignment_id):
-    teaching_assignment = TeachingAssignment.query.filter_by(
-        id=teaching_assignment_id
-    ).first()
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
 
-    if teaching_assignment is None:
-        return jsonify({
-            "error": "Teaching assignment not found"
-        }), 404
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
 
-    db.session.delete(teaching_assignment)
+    # Only admins can delete teaching assignments
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the assignment
+    assignment = db.session.get(
+        TeachingAssignment,
+        teaching_assignment_id
+    )
+
+    if assignment is None:
+        return jsonify({"error": "Teaching assignment not found"}), 404
+
+    # Delete the assignment
+    db.session.delete(assignment)
     db.session.commit()
 
     return jsonify({
         "message": "Teaching assignment deleted successfully"
-    })
+    }), 200
 
-# ==================== ACADEMIC SESSION CRUD ====================
 
-# CREATE ACADEMIC SESSION
+# ==================== CREATE ACADEMIC SESSION (ADMIN ONLY) ====================
+
 @app.route("/api/academic-sessions", methods=["POST"])
+@jwt_required()
 def create_academic_session():
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only admins can create academic sessions
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Validate the request body
     data = request.get_json()
 
-    academic_session = AcademicSession(
-        session=data["session"],
-        term=data["term"]
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
+
+    session_name = data.get("session")
+    term = data.get("term")
+
+    if not isinstance(session_name, str) or not session_name.strip():
+        return jsonify({"error": "A valid academic session is required"}), 400
+
+    if not isinstance(term, str) or not term.strip():
+        return jsonify({"error": "A valid academic term is required"}), 400
+
+    # Prevent duplicate session and term combinations
+    existing_session = AcademicSession.query.filter_by(
+        session=session_name.strip(),
+        term=term.strip()
+    ).first()
+
+    if existing_session is not None:
+        return jsonify({
+            "error": "This academic session and term already exist"
+        }), 409
+
+    # Create the academic session
+    new_academic_session = AcademicSession(
+        session=session_name.strip(),
+        term=term.strip()
     )
 
-    db.session.add(academic_session)
+    db.session.add(new_academic_session)
     db.session.commit()
 
     return jsonify({
-        "message": "Academic session created successfully"
-    })
+        "message": "Academic session created successfully",
+        "academic_session": {
+            "id": new_academic_session.id,
+            "session": new_academic_session.session,
+            "term": new_academic_session.term
+        }
+    }), 201
 
 
-# GET ALL ACADEMIC SESSIONS
+# ==================== GET ALL ACADEMIC SESSIONS (ADMIN ONLY) ====================
+
 @app.route("/api/academic-sessions", methods=["GET"])
+@jwt_required()
 def get_academic_sessions():
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Retrieve all academic sessions
     academic_sessions = AcademicSession.query.all()
-    academic_sessions_data = []
+
+    sessions_data = []
 
     for academic_session in academic_sessions:
-        academic_session_data = {
+        sessions_data.append({
             "id": academic_session.id,
             "session": academic_session.session,
             "term": academic_session.term
-        }
+        })
 
-        academic_sessions_data.append(academic_session_data)
-
-    return jsonify(academic_sessions_data)
+    return jsonify(sessions_data), 200
 
 
-# GET ONE ACADEMIC SESSION
-@app.route("/api/academic-sessions/<int:academic_session_id>")
+# ==================== GET ONE ACADEMIC SESSION (ADMIN ONLY) ====================
+
+@app.route(
+    "/api/academic-sessions/<int:academic_session_id>",
+    methods=["GET"]
+)
+@jwt_required()
 def get_academic_session(academic_session_id):
-    academic_session = AcademicSession.query.filter_by(
-        id=academic_session_id
-    ).first()
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the academic session
+    academic_session = db.session.get(
+        AcademicSession,
+        academic_session_id
+    )
 
     if academic_session is None:
-        return jsonify({
-            "error": "Academic session not found"
-        }), 404
+        return jsonify({"error": "Academic session not found"}), 404
 
     return jsonify({
         "id": academic_session.id,
         "session": academic_session.session,
         "term": academic_session.term
-    })
+    }), 200
 
 
-# UPDATE ACADEMIC SESSION
-@app.route("/api/academic-sessions/<int:academic_session_id>", methods=["PUT"])
+
+# ==================== UPDATE ACADEMIC SESSION (ADMIN ONLY) ====================
+
+@app.route(
+    "/api/academic-sessions/<int:academic_session_id>",
+    methods=["PUT"]
+)
+@jwt_required()
 def update_academic_session(academic_session_id):
-    academic_session = AcademicSession.query.filter_by(
-        id=academic_session_id
-    ).first()
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the academic session
+    academic_session = db.session.get(
+        AcademicSession,
+        academic_session_id
+    )
 
     if academic_session is None:
-        return jsonify({
-            "error": "Academic session not found"
-        }), 404
+        return jsonify({"error": "Academic session not found"}), 404
 
+    # Validate the request body
     data = request.get_json()
 
-    academic_session.session = data["session"]
-    academic_session.term = data["term"]
+    if not isinstance(data, dict):
+        return jsonify({"error": "A valid JSON object is required"}), 400
+
+    session_name = data.get("session")
+    term = data.get("term")
+
+    if not isinstance(session_name, str) or not session_name.strip():
+        return jsonify({"error": "A valid academic session is required"}), 400
+
+    if not isinstance(term, str) or not term.strip():
+        return jsonify({"error": "A valid academic term is required"}), 400
+
+    # Prevent duplicate session and term combinations
+    duplicate = AcademicSession.query.filter_by(
+        session=session_name.strip(),
+        term=term.strip()
+    ).filter(
+        AcademicSession.id != academic_session.id
+    ).first()
+
+    if duplicate is not None:
+        return jsonify({
+            "error": "This academic session and term already exist"
+        }), 409
+
+    # Update the academic session
+    academic_session.session = session_name.strip()
+    academic_session.term = term.strip()
 
     db.session.commit()
 
     return jsonify({
-        "message": "Academic session updated successfully"
-    })
+        "message": "Academic session updated successfully",
+        "academic_session": {
+            "id": academic_session.id,
+            "session": academic_session.session,
+            "term": academic_session.term
+        }
+    }), 200
 
 
-# DELETE ACADEMIC SESSION
-@app.route("/api/academic-sessions/<int:academic_session_id>", methods=["DELETE"])
+# ==================== DELETE ACADEMIC SESSION (ADMIN ONLY) ====================
+
+@app.route(
+    "/api/academic-sessions/<int:academic_session_id>",
+    methods=["DELETE"]
+)
+@jwt_required()
 def delete_academic_session(academic_session_id):
-    academic_session = AcademicSession.query.filter_by(
-        id=academic_session_id
-    ).first()
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the academic session
+    academic_session = db.session.get(
+        AcademicSession,
+        academic_session_id
+    )
 
     if academic_session is None:
-        return jsonify({
-            "error": "Academic session not found"
-        }), 404
+        return jsonify({"error": "Academic session not found"}), 404
 
+    # Delete the academic session
     db.session.delete(academic_session)
     db.session.commit()
 
     return jsonify({
         "message": "Academic session deleted successfully"
-    })
+    }), 200
 
+# ==================== CREATE RESULT ====================
 
-# ==================== RESULT CRUD ====================
-
-# CREATE RESULT
 @app.route("/api/results", methods=["POST"])
+@jwt_required()
 def create_result():
+
+    # 1. Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 2. Only admins and teachers can create results
+    if current_user.role not in ("admin", "teacher"):
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 3. Read and validate the request body
     data = request.get_json()
 
-    result = Result(
-        student_id=data["student_id"],
-        subject_id=data["subject_id"],
-        score=data["score"],
-        grade=data["grade"],
-        academic_session_id=data["academic_session_id"]
+    if not isinstance(data, dict):
+        return jsonify({
+            "error": "A valid JSON object is required"
+        }), 400
+
+    student_id = data.get("student_id")
+    subject_id = data.get("subject_id")
+    score = data.get("score")
+    academic_session_id = data.get("academic_session_id")
+
+    # 4. Validate the IDs
+    ids = (student_id, subject_id, academic_session_id)
+
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value <= 0
+        for value in ids
+    ):
+        return jsonify({
+            "error": "student_id, subject_id, and academic_session_id must be positive integers"
+        }), 400
+
+    # 5. Validate the score
+    if (
+        isinstance(score, bool)
+        or not isinstance(score, (int, float))
+        or not 0 <= score <= 100
+    ):
+        return jsonify({
+            "error": "Score must be a number between 0 and 100"
+        }), 400
+
+    # 6. Find the student profile
+    student = db.session.get(Student, student_id)
+
+    if student is None:
+        return jsonify({"error": "Student not found"}), 404
+
+    # 7. Find the subject
+    subject = db.session.get(Subject, subject_id)
+
+    if subject is None:
+        return jsonify({"error": "Subject not found"}), 404
+
+    # 8. Find the academic session
+    academic_session = db.session.get(
+        AcademicSession,
+        academic_session_id
     )
 
-    db.session.add(result)
+    if academic_session is None:
+        return jsonify({
+            "error": "Academic session not found"
+        }), 404
+
+    # 9. Check whether this result already exists
+    existing_result = Result.query.filter_by(
+        student_id=student_id,
+        subject_id=subject_id,
+        academic_session_id=academic_session_id
+    ).first()
+
+    if existing_result:
+        return jsonify({
+            "error": "A result already exists for this student, subject, and academic session"
+        }), 409
+
+    # 10. Teachers must be assigned to this student's class and subject
+    if current_user.role == "teacher":
+
+        teacher = Teacher.query.filter_by(
+            user_id=current_user.id
+        ).first()
+
+        if teacher is None:
+            return jsonify({
+                "error": "Teacher profile not found"
+            }), 404
+
+        assignment = TeachingAssignment.query.filter_by(
+            teacher_id=teacher.id,
+            class_id=student.class_id,
+            subject_id=subject_id
+        ).first()
+
+        if assignment is None:
+            return jsonify({
+                "error": "You are not assigned to this class and subject"
+            }), 403
+
+    # 11. Calculate the grade on the server
+    if score >= 70:
+        grade = "A"
+    elif score >= 60:
+        grade = "B"
+    elif score >= 50:
+        grade = "C"
+    elif score >= 45:
+        grade = "D"
+    elif score >= 40:
+        grade = "E"
+    else:
+        grade = "F"
+
+    # 12. Create the result
+    new_result = Result(
+        student_id=student_id,
+        subject_id=subject_id,
+        score=score,
+        grade=grade,
+        academic_session_id=academic_session_id
+    )
+
+    db.session.add(new_result)
     db.session.commit()
 
+    # 13. Return the created result
     return jsonify({
-        "message": "Result created successfully"
-    })
+        "message": "Result created successfully",
+        "result": {
+            "id": new_result.id,
+            "student_id": new_result.student_id,
+            "subject_id": new_result.subject_id,
+            "score": new_result.score,
+            "grade": new_result.grade,
+            "academic_session_id": new_result.academic_session_id
+        }
+    }), 201
 
+# ==================== GET ALL RESULTS ====================
 
-# GET ALL RESULTS
 @app.route("/api/results", methods=["GET"])
+@jwt_required()
 def get_results():
-    results = Result.query.all()
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Admins can view every result
+    if current_user.role == "admin":
+        results = Result.query.all()
+
+    # Teachers can view results within their assigned classes and subjects
+    elif current_user.role == "teacher":
+        teacher = Teacher.query.filter_by(
+            user_id=current_user.id
+        ).first()
+
+        if teacher is None:
+            return jsonify({
+                "error": "Teacher profile not found"
+            }), 404
+
+        assignments = TeachingAssignment.query.filter_by(
+            teacher_id=teacher.id
+        ).all()
+
+        if not assignments:
+            return jsonify([]), 200
+
+        assignment_pairs = [
+            (assignment.class_id, assignment.subject_id)
+            for assignment in assignments
+        ]
+
+        results = (
+            Result.query
+            .join(Student, Result.student_id == Student.id)
+            .filter(
+                db.or_(*[
+                    db.and_(
+                        Student.class_id == class_id,
+                        Result.subject_id == subject_id
+                    )
+                    for class_id, subject_id in assignment_pairs
+                ])
+            )
+            .all()
+        )
+
+    # Students cannot access the all-results endpoint
+    elif current_user.role == "student":
+        return jsonify({
+            "error": "Access forbidden. Use your own results endpoint."
+        }), 403
+
+    else:
+        return jsonify({"error": "Access forbidden"}), 403
+
     results_data = []
 
     for result in results:
-        result_data = {
+        results_data.append({
             "id": result.id,
             "student_id": result.student_id,
             "subject_id": result.subject_id,
             "score": result.score,
             "grade": result.grade,
             "academic_session_id": result.academic_session_id
-        }
+        })
 
-        results_data.append(result_data)
-
-    return jsonify(results_data)
+    return jsonify(results_data), 200
 
 
-# GET ONE RESULT
-@app.route("/api/results/<int:result_id>")
+# ==================== GET MY RESULTS (STUDENT) ====================
+
+@app.route("/api/my-results", methods=["GET"])
+@jwt_required()
+def get_my_results():
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Only students can access this endpoint
+    if current_user.role != "student":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # Find the student profile linked to this account
+    student = Student.query.filter_by(
+        user_id=current_user.id
+    ).first()
+
+    if student is None:
+        return jsonify({"error": "Student profile not found"}), 404
+
+    # Retrieve only this student's results
+    results = Result.query.filter_by(
+        student_id=student.id
+    ).all()
+
+    # Format the results
+    results_data = []
+
+    for result in results:
+        results_data.append({
+            "id": result.id,
+            "student_id": result.student_id,
+            "subject_id": result.subject_id,
+            "score": result.score,
+            "grade": result.grade,
+            "academic_session_id": result.academic_session_id
+        })
+
+    return jsonify(results_data), 200
+
+
+# ==================== GET ONE RESULT ====================
+
+@app.route("/api/results/<int:result_id>", methods=["GET"])
+@jwt_required()
 def get_result(result_id):
-    result = Result.query.filter_by(id=result_id).first()
+    # Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # Find the result
+    result = db.session.get(Result, result_id)
 
     if result is None:
-        return jsonify({
-            "error": "Result not found"
-        }), 404
+        return jsonify({"error": "Result not found"}), 404
+
+    # Admins can view any result
+    if current_user.role == "admin":
+        pass
+
+    # Students can view only their own results
+    elif current_user.role == "student":
+        student = Student.query.filter_by(
+            user_id=current_user.id
+        ).first()
+
+        if student is None:
+            return jsonify({
+                "error": "Student profile not found"
+            }), 404
+
+        if result.student_id != student.id:
+            return jsonify({"error": "Access forbidden"}), 403
+
+    # Teachers can view results for their assigned classes and subjects
+    elif current_user.role == "teacher":
+        teacher = Teacher.query.filter_by(
+            user_id=current_user.id
+        ).first()
+
+        if teacher is None:
+            return jsonify({
+                "error": "Teacher profile not found"
+            }), 404
+
+        student = db.session.get(Student, result.student_id)
+
+        assignment = TeachingAssignment.query.filter_by(
+            teacher_id=teacher.id,
+            class_id=student.class_id,
+            subject_id=result.subject_id
+        ).first()
+
+        if assignment is None:
+            return jsonify({"error": "Access forbidden"}), 403
+
+    else:
+        return jsonify({"error": "Access forbidden"}), 403
 
     return jsonify({
         "id": result.id,
@@ -911,50 +2292,217 @@ def get_result(result_id):
         "score": result.score,
         "grade": result.grade,
         "academic_session_id": result.academic_session_id
-    })
+    }), 200
 
 
-# UPDATE RESULT
+# ==================== UPDATE RESULT ====================
+# ==================== UPDATE RESULT ====================
+
 @app.route("/api/results/<int:result_id>", methods=["PUT"])
+@jwt_required()
 def update_result(result_id):
-    result = Result.query.filter_by(id=result_id).first()
+
+    # 1. Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 2. Only admins and teachers can update results
+    if current_user.role not in ("admin", "teacher"):
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 3. Find the result to update
+    result = db.session.get(Result, result_id)
 
     if result is None:
-        return jsonify({
-            "error": "Result not found"
-        }), 404
+        return jsonify({"error": "Result not found"}), 404
 
+    # 4. Identify the teacher and check the existing assignment
+    teacher = None
+
+    if current_user.role == "teacher":
+        teacher = Teacher.query.filter_by(
+            user_id=current_user.id
+        ).first()
+
+        if teacher is None:
+            return jsonify({
+                "error": "Teacher profile not found"
+            }), 404
+
+        existing_student = db.session.get(
+            Student, result.student_id
+        )
+
+        if existing_student is None:
+            return jsonify({"error": "Student not found"}), 404
+
+        existing_assignment = TeachingAssignment.query.filter_by(
+            teacher_id=teacher.id,
+            class_id=existing_student.class_id,
+            subject_id=result.subject_id
+        ).first()
+
+        if existing_assignment is None:
+            return jsonify({
+                "error": "Access forbidden"
+            }), 403
+
+    # 5. Validate the request body
     data = request.get_json()
 
-    result.student_id = data["student_id"]
-    result.subject_id = data["subject_id"]
-    result.score = data["score"]
-    result.grade = data["grade"]
-    result.academic_session_id = data["academic_session_id"]
+    if not isinstance(data, dict):
+        return jsonify({
+            "error": "A valid JSON object is required"
+        }), 400
+
+    student_id = data.get("student_id")
+    subject_id = data.get("subject_id")
+    score = data.get("score")
+    academic_session_id = data.get("academic_session_id")
+
+    # 6. Validate the IDs
+    ids = (student_id, subject_id, academic_session_id)
+
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value <= 0
+        for value in ids
+    ):
+        return jsonify({
+            "error": "student_id, subject_id, and academic_session_id must be positive integers"
+        }), 400
+
+    # 7. Validate the score
+    if (
+        isinstance(score, bool)
+        or not isinstance(score, (int, float))
+        or not 0 <= score <= 100
+    ):
+        return jsonify({
+            "error": "Score must be a number between 0 and 100"
+        }), 400
+
+    # 8. Verify that the student exists
+    student = db.session.get(Student, student_id)
+
+    if student is None:
+        return jsonify({"error": "Student not found"}), 404
+
+    # 9. Verify that the subject exists
+    subject = db.session.get(Subject, subject_id)
+
+    if subject is None:
+        return jsonify({"error": "Subject not found"}), 404
+
+    # 10. Verify that the academic session exists
+    academic_session = db.session.get(
+        AcademicSession,
+        academic_session_id
+    )
+
+    if academic_session is None:
+        return jsonify({
+            "error": "Academic session not found"
+        }), 404
+
+    # 11. Teachers must be assigned to the new class and subject
+    if current_user.role == "teacher":
+        new_assignment = TeachingAssignment.query.filter_by(
+            teacher_id=teacher.id,
+            class_id=student.class_id,
+            subject_id=subject_id
+        ).first()
+
+        if new_assignment is None:
+            return jsonify({
+                "error": "You are not assigned to the new class and subject"
+            }), 403
+
+    # 12. Prevent duplicate results
+    existing_result = Result.query.filter_by(
+        student_id=student_id,
+        subject_id=subject_id,
+        academic_session_id=academic_session_id
+    ).first()
+
+    if existing_result and existing_result.id != result.id:
+        return jsonify({
+            "error": "A result already exists for this student, subject, and academic session"
+        }), 409
+
+    # 13. Calculate the grade on the server
+    if score >= 70:
+        grade = "A"
+    elif score >= 60:
+        grade = "B"
+    elif score >= 50:
+        grade = "C"
+    elif score >= 45:
+        grade = "D"
+    elif score >= 40:
+        grade = "E"
+    else:
+        grade = "F"
+
+    # 14. Update the result
+    result.student_id = student_id
+    result.subject_id = subject_id
+    result.score = score
+    result.grade = grade
+    result.academic_session_id = academic_session_id
 
     db.session.commit()
 
+    # 15. Return the updated result
     return jsonify({
-        "message": "Result updated successfully"
-    })
+        "message": "Result updated successfully",
+        "result": {
+            "id": result.id,
+            "student_id": result.student_id,
+            "subject_id": result.subject_id,
+            "score": result.score,
+            "grade": result.grade,
+            "academic_session_id": result.academic_session_id
+        }
+    }), 200
 
 
-# DELETE RESULT
+# ==================== DELETE RESULT ====================
+
 @app.route("/api/results/<int:result_id>", methods=["DELETE"])
+@jwt_required()
 def delete_result(result_id):
-    result = Result.query.filter_by(id=result_id).first()
+
+    # 1. Identify the logged-in user
+    current_user_id = get_jwt_identity()
+    current_user = db.session.get(User, current_user_id)
+
+    if current_user is None:
+        return jsonify({"error": "User not found"}), 404
+
+    # 2. Only admins can delete results
+    if current_user.role != "admin":
+        return jsonify({"error": "Access forbidden"}), 403
+
+    # 3. Find the result
+    result = db.session.get(Result, result_id)
 
     if result is None:
-        return jsonify({
-            "error": "Result not found"
-        }), 404
+        return jsonify({"error": "Result not found"}), 404
 
+    # 4. Delete the result
     db.session.delete(result)
     db.session.commit()
 
+    # 5. Confirm deletion
     return jsonify({
-        "message": "Result deleted successfully"
-    })
+        "message": "Result deleted successfully",
+        "result_id": result_id
+    }), 200
 
 
 @app.route("/api/register", methods=["POST"])
@@ -962,41 +2510,30 @@ def register():
     # Get the registration data sent by the user
     data = request.get_json()
 
-    # Check that the request contains a JSON object
-    if not isinstance(data, dict):
-        return jsonify({
-            "error": "A valid JSON object is required"
-        }), 400
-
-    # Check that all required fields are present
-    required_fields = ["name", "email", "password"]
-
-    if not all(field in data for field in required_fields):
-        return jsonify({
-            "error": "Name, email, and password are required"
-        }), 400
-
-    # Check that each required field is a non-empty string
-    if not all(
-        isinstance(data[field], str) and data[field].strip()
-        for field in required_fields
+    if not data or not all(
+    field in data for field in ["name", "email", "password"]
     ):
         return jsonify({
-            "error": "Name, email, and password must be non-empty strings"
-        }), 400
+        "error": "Name, email, and password are required"
+    }), 400
 
-    # Remove unnecessary spaces and standardize the email
-    name = data["name"].strip()
-    email = data["email"].strip().lower()
-    password = data["password"]
+
+    # Check that none of the required fields is empty
+    if not all(data[field].strip() for field in ["name", "email", "password"]):
+         return jsonify({
+        "error": "Name, email, and password cannot be empty"
+    }), 400
 
     # Check whether the email is already registered
-    existing_user = User.query.filter_by(email=email).first()
+    existing_user = User.query.filter_by(email=data["email"]).first()
 
     if existing_user:
-        return jsonify({
-            "error": "Email is already registered"
-        }), 409
+     return jsonify({
+        "error": "Email is already registered"
+    }), 409
+
+    # Get the password the user entered
+    password = data["password"]
 
     # Convert the password into a secure hash
     hashed_password = bcrypt.hashpw(
@@ -1004,25 +2541,21 @@ def register():
         bcrypt.gensalt()
     )
 
-    # Create a new user account
-    # Public registration only allows the student role
+    # Create a new User using the registration information
     user = User(
-        name=name,
-        email=email,
+        name=data["name"],
+        email=data["email"],
         password_hash=hashed_password.decode("utf-8"),
         role="student"
     )
 
-    # Add the user to the database and save the changes
+    # Add the new user to the database
     db.session.add(user)
     db.session.commit()
 
-    # Confirm successful registration
     return jsonify({
         "message": "Registration successful"
-    }), 201
-
-
+    })
 @app.route("/api/login", methods=["POST"])
 def login():
     # Get the login data sent by the user
@@ -1091,6 +2624,35 @@ def protected():
         "message": "You have accessed a protected route",
         "user_id": current_user_id
     }), 200
+
+
+
+@app.route("/api/admin-only", methods=["GET"])
+@jwt_required()
+def admin_only():
+    # Get the ID of the authenticated user
+    current_user_id = get_jwt_identity()
+
+    # Find the user in the database
+    user = db.session.get(User, current_user_id)
+
+    # Check whether the user still exists
+    if user is None:
+        return jsonify({
+            "error": "User not found"
+        }), 404
+
+    # Check whether the user is an administrator
+    if user.role != "admin":
+        return jsonify({
+            "error": "Access forbidden"
+        }), 403
+
+    # Allow access to administrators
+    return jsonify({
+        "message": "Welcome, administrator!"
+    }), 200
+
 
 
 @app.route("/")
