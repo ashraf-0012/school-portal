@@ -725,7 +725,7 @@ def delete_student(student_id):
 
 # ==================== CLASS CRUD ====================
 # CREATE CLASS (ADMIN ONLY)
-@app.route("/api/class", methods=["POST"])
+@app.route("/api/classes", methods=["POST"])
 @jwt_required()
 def create_class():
     # 1. Identify the logged-in user
@@ -771,7 +771,7 @@ def create_class():
 
 
 # GET ALL CLASSES (ADMIN ONLY)
-@app.route("/api/class", methods=["GET"])
+@app.route("/api/classes", methods=["GET"])
 @jwt_required()
 def get_classes():
     # 1. Identify the logged-in user
@@ -805,7 +805,7 @@ def get_classes():
     return jsonify(classes_data), 200
 
 # GET ONE CLASS (ADMIN, ASSIGNED TEACHER, OR STUDENT IN THAT CLASS)
-@app.route("/api/class/<int:class_id>", methods=["GET"])
+@app.route("/api/classes/<int:class_id>", methods=["GET"])
 @jwt_required()
 def get_class(class_id):
 
@@ -878,7 +878,7 @@ def get_class(class_id):
     }), 200
 
 # UPDATE CLASS (ADMIN ONLY)
-@app.route("/api/class/<int:class_id>", methods=["PUT"])
+@app.route("/api/classes/<int:class_id>", methods=["PUT"])
 @jwt_required()
 def update_class(class_id):
     # 1. Identify the logged-in user
@@ -925,7 +925,7 @@ def update_class(class_id):
     }), 200
 
 # DELETE CLASS (ADMIN ONLY)
-@app.route("/api/class/<int:class_id>", methods=["DELETE"])
+@app.route("/api/classes/<int:class_id>", methods=["DELETE"])
 @jwt_required()
 def delete_class(class_id):
     # 1. Identify the logged-in user
@@ -2294,8 +2294,6 @@ def get_result(result_id):
         "academic_session_id": result.academic_session_id
     }), 200
 
-
-# ==================== UPDATE RESULT ====================
 # ==================== UPDATE RESULT ====================
 
 @app.route("/api/results/<int:result_id>", methods=["PUT"])
@@ -2556,12 +2554,13 @@ def register():
     return jsonify({
         "message": "Registration successful"
     })
+
+
 @app.route("/api/login", methods=["POST"])
 def login():
-    # Get the login data sent by the user
     data = request.get_json()
 
-    # Check that the required fields exist
+    # Check that required fields exist
     if not data or not all(
         field in data for field in ["email", "password"]
     ):
@@ -2569,7 +2568,7 @@ def login():
             "error": "Email and password are required"
         }), 400
 
-    # Check that the fields are not empty or whitespace
+    # Check that fields are not empty
     if not all(
         isinstance(data[field], str) and data[field].strip()
         for field in ["email", "password"]
@@ -2578,41 +2577,42 @@ def login():
             "error": "Email and password cannot be empty"
         }), 400
 
-    # Get the email and password entered during login
+    # Get the login details
     email = data["email"].strip()
     password = data["password"]
 
-    # Find the user with this email
+    # Find the user
     user = User.query.filter_by(email=email).first()
 
-    # Check if the user exists
+    # Check whether the user exists
     if user is None:
         return jsonify({
             "error": "Invalid email or password"
         }), 401
 
-    # Check whether the entered password matches the stored hash
+    # Verify the password
     password_correct = bcrypt.checkpw(
         password.encode("utf-8"),
         user.password_hash.encode("utf-8")
     )
 
-    # If the password is correct, generate an access token
-    if password_correct:
-        access_token = create_access_token(
-            identity=str(user.id)
-        )
-
-        # Return the token to the client
+    # Reject incorrect passwords
+    if not password_correct:
         return jsonify({
-            "message": "Login successful",
-            "access_token": access_token
-        }), 200
+            "error": "Invalid email or password"
+        }), 401
 
-    # Use the same error for an incorrect password
+    # Generate an access token
+    access_token = create_access_token(
+        identity=str(user.id)
+    )
+
+    # Return the token and the user's actual role
     return jsonify({
-        "error": "Invalid email or password"
-    }), 401
+        "message": "Login successful",
+        "access_token": access_token,
+        "role": user.role
+    }), 200
 
 @app.route("/api/protected", methods=["GET"])
 @jwt_required()
@@ -2625,6 +2625,25 @@ def protected():
         "user_id": current_user_id
     }), 200
 
+
+@app.route("/api/me", methods=["GET"])
+@jwt_required()
+def get_current_user():
+    current_user_id = get_jwt_identity()
+
+    user = db.session.get(User, current_user_id)
+
+    if user is None:
+        return jsonify({
+            "error": "User not found"
+        }), 404
+
+    return jsonify({
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role
+    }), 200
 
 
 @app.route("/api/admin-only", methods=["GET"])
