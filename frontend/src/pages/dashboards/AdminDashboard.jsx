@@ -43,6 +43,25 @@ export default function AdminDashboard() {
     { id: 'results', label: 'Student Results', icon: '📝' },
   ];
 
+  // Resolve internal relationship IDs to readable labels for the interface.
+  // Database IDs are still used internally for API requests and React keys.
+  const getUser = (userId) => users.find((user) => Number(user.id) === Number(userId));
+  const getUserName = (userId) => getUser(userId)?.name || 'Unknown user';
+  const getClassName = (classId) => classes.find((item) => Number(item.id) === Number(classId))?.name || 'Unassigned class';
+  const getSubjectName = (subjectId) => subjects.find((item) => Number(item.id) === Number(subjectId))?.name || 'Unknown subject';
+  const getTeacherName = (teacherId) => {
+    const teacher = teachers.find((item) => Number(item.id) === Number(teacherId));
+    return teacher ? getUserName(teacher.user_id) : 'Unknown teacher';
+  };
+  const getStudentName = (studentId) => {
+    const student = students.find((item) => Number(item.id) === Number(studentId));
+    return student ? getUserName(student.user_id) : 'Unknown student';
+  };
+  const getSessionName = (sessionId) => {
+    const session = sessions.find((item) => Number(item.id) === Number(sessionId));
+    return session ? `${session.session} · ${session.term}` : 'Unknown session';
+  };
+
   useEffect(() => {
     loadAllData();
   }, []);
@@ -108,7 +127,7 @@ export default function AdminDashboard() {
     e.preventDefault();
     setMessage('');
     setError('');
-    const res = await api.createClass(newClass.name);
+    const res = await api.createClass({ name: newClass.name.trim() });
     if (res.ok) {
       setMessage('Class created successfully.');
       setNewClass({ name: '' });
@@ -134,7 +153,7 @@ export default function AdminDashboard() {
     e.preventDefault();
     setMessage('');
     setError('');
-    const res = await api.createSubject(newSubject.name);
+    const res = await api.createSubject({ name: newSubject.name.trim() });
     if (res.ok) {
       setMessage('Subject created successfully.');
       setNewSubject({ name: '' });
@@ -190,7 +209,7 @@ export default function AdminDashboard() {
     e.preventDefault();
     setMessage('');
     setError('');
-    const res = await api.createTeacher(parseInt(newTeacher.user_id));
+    const res = await api.createTeacher({ user_id: parseInt(newTeacher.user_id, 10) });
     if (res.ok) {
       setMessage('Teacher profile created.');
       setNewTeacher({ user_id: '' });
@@ -420,7 +439,6 @@ export default function AdminDashboard() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>ID</th>
                   <th>Name</th>
                   <th>Email</th>
                   <th>Role</th>
@@ -430,7 +448,6 @@ export default function AdminDashboard() {
               <tbody>
                 {users.map((u) => (
                   <tr key={u.id}>
-                    <td>#{u.id}</td>
                     <td><strong>{u.name}</strong></td>
                     <td>{u.email}</td>
                     <td>
@@ -475,7 +492,7 @@ export default function AdminDashboard() {
                 <option value="">Select Student User Account</option>
                 {users.filter((u) => u.role === 'student').map((u) => (
                   <option key={u.id} value={u.id}>
-                    #{u.id} - {u.name} ({u.email})
+                    {u.name} ({u.email})
                   </option>
                 ))}
               </select>
@@ -499,7 +516,7 @@ export default function AdminDashboard() {
                   <option value="">Select Enrolled Class</option>
                   {classes.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name} (ID: #{c.id})
+                      {c.name}
                     </option>
                   ))}
                 </select>
@@ -512,20 +529,18 @@ export default function AdminDashboard() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Student ID</th>
-                  <th>User ID</th>
+                  <th>Student</th>
                   <th>Admission Number</th>
-                  <th>Class ID</th>
+                  <th>Class</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {students.map((st) => (
                   <tr key={st.id}>
-                    <td>#{st.id}</td>
-                    <td>User #{st.user_id}</td>
-                    <td><strong>{st.admission_number}</strong></td>
-                    <td>Class #{st.class_id}</td>
+                    <td><strong>{getUserName(st.user_id)}</strong></td>
+                    <td>{st.admission_number || '—'}</td>
+                    <td>{getClassName(st.class_id)}</td>
                     <td>
                       <button
                         type="button"
@@ -539,7 +554,7 @@ export default function AdminDashboard() {
                 ))}
                 {students.length === 0 && (
                   <tr>
-                    <td colSpan="5" style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>
+                    <td colSpan="4" style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>
                       No student profiles enrolled yet.
                     </td>
                   </tr>
@@ -572,7 +587,6 @@ export default function AdminDashboard() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Class ID</th>
                   <th>Class Name</th>
                   <th>Actions</th>
                 </tr>
@@ -580,7 +594,6 @@ export default function AdminDashboard() {
               <tbody>
                 {classes.map((c) => (
                   <tr key={c.id}>
-                    <td>#{c.id}</td>
                     <td><strong>{c.name}</strong></td>
                     <td>
                       <button
@@ -614,7 +627,7 @@ export default function AdminDashboard() {
                 <option value="">Select Teacher User Account</option>
                 {users.filter((u) => u.role === 'teacher').map((u) => (
                   <option key={u.id} value={u.id}>
-                    #{u.id} - {u.name} ({u.email})
+                    {u.name} ({u.email})
                   </option>
                 ))}
               </select>
@@ -626,16 +639,16 @@ export default function AdminDashboard() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Teacher ID</th>
-                  <th>User ID</th>
+                  <th>Teacher</th>
+                  <th>Email</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {teachers.map((t) => (
                   <tr key={t.id}>
-                    <td>#{t.id}</td>
-                    <td>User #{t.user_id}</td>
+                    <td><strong>{getUserName(t.user_id)}</strong></td>
+                    <td>{getUser(t.user_id)?.email || '—'}</td>
                     <td>
                       <button
                         type="button"
@@ -675,7 +688,6 @@ export default function AdminDashboard() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Subject ID</th>
                   <th>Subject Name</th>
                   <th>Actions</th>
                 </tr>
@@ -683,7 +695,6 @@ export default function AdminDashboard() {
               <tbody>
                 {subjects.map((s) => (
                   <tr key={s.id}>
-                    <td>#{s.id}</td>
                     <td><strong>{s.name}</strong></td>
                     <td>
                       <button
@@ -716,7 +727,7 @@ export default function AdminDashboard() {
               >
                 <option value="">Select Teacher Profile</option>
                 {teachers.map((t) => (
-                  <option key={t.id} value={t.id}>Teacher #{t.id} (User #{t.user_id})</option>
+                  <option key={t.id} value={t.id}>{getUserName(t.user_id)}</option>
                 ))}
               </select>
 
@@ -753,20 +764,18 @@ export default function AdminDashboard() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Assignment ID</th>
-                  <th>Teacher ID</th>
-                  <th>Class ID</th>
-                  <th>Subject ID</th>
+                  <th>Teacher</th>
+                  <th>Class</th>
+                  <th>Subject</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {assignments.map((a) => (
                   <tr key={a.id}>
-                    <td>#{a.id}</td>
-                    <td>Teacher #{a.teacher_id}</td>
-                    <td>Class #{a.class_id}</td>
-                    <td>Subject #{a.subject_id}</td>
+                    <td><strong>{getTeacherName(a.teacher_id)}</strong></td>
+                    <td>{getClassName(a.class_id)}</td>
+                    <td>{getSubjectName(a.subject_id)}</td>
                     <td>
                       <button
                         type="button"
@@ -816,8 +825,7 @@ export default function AdminDashboard() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Session ID</th>
-                  <th>Session</th>
+                  <th>Academic Session</th>
                   <th>Term</th>
                   <th>Actions</th>
                 </tr>
@@ -825,7 +833,6 @@ export default function AdminDashboard() {
               <tbody>
                 {sessions.map((s) => (
                   <tr key={s.id}>
-                    <td>#{s.id}</td>
                     <td><strong>{s.session}</strong></td>
                     <td>{s.term}</td>
                     <td>
@@ -850,9 +857,6 @@ export default function AdminDashboard() {
         <div className="flex-col gap-6">
           <Card featured>
             <h3 className="heading-sm" style={{ marginBottom: '1rem' }}>Record Academic Result</h3>
-            <p className="text-muted" style={{ fontSize: '0.8125rem', marginBottom: '1rem' }}>
-              Grades are calculated automatically by the server based on the Nigerian 0–100 scale (A: ≥70, B: ≥60, C: ≥50, D: ≥45, E: ≥40, F: &lt;40).
-            </p>
             <form onSubmit={handleCreateResult} className="grid grid-4 gap-4">
               <select
                 className="form-control"
@@ -863,7 +867,7 @@ export default function AdminDashboard() {
                 <option value="">Select Student Profile</option>
                 {students.map((st) => (
                   <option key={st.id} value={st.id}>
-                    Student #{st.id} ({st.admission_number})
+                    {getUserName(st.user_id)} · {st.admission_number || 'No admission number'}
                   </option>
                 ))}
               </select>
@@ -899,8 +903,20 @@ export default function AdminDashboard() {
                   type="number"
                   min="0"
                   max="100"
+                  step="1"
+                  inputMode="numeric"
                   placeholder="Score (0-100)"
                   className="form-control"
+                  style={{
+                    flex: '1 1 0',
+                    minWidth: 0,
+                    color: '#111827',
+                    WebkitTextFillColor: '#111827',
+                    backgroundColor: '#ffffff',
+                    caretColor: '#111827',
+                    appearance: 'auto',
+                    WebkitAppearance: 'auto',
+                  }}
                   value={newResult.score}
                   onChange={(e) => setNewResult({ ...newResult, score: e.target.value })}
                   required
@@ -914,10 +930,9 @@ export default function AdminDashboard() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Result ID</th>
-                  <th>Student ID</th>
-                  <th>Subject ID</th>
-                  <th>Session ID</th>
+                  <th>Student</th>
+                  <th>Subject</th>
+                  <th>Academic Session</th>
                   <th>Score</th>
                   <th>Grade</th>
                   <th>Actions</th>
@@ -926,10 +941,9 @@ export default function AdminDashboard() {
               <tbody>
                 {results.map((r) => (
                   <tr key={r.id}>
-                    <td>#{r.id}</td>
-                    <td>Student #{r.student_id}</td>
-                    <td>Subject #{r.subject_id}</td>
-                    <td>Session #{r.academic_session_id}</td>
+                    <td><strong>{getStudentName(r.student_id)}</strong></td>
+                    <td>{getSubjectName(r.subject_id)}</td>
+                    <td>{getSessionName(r.academic_session_id)}</td>
                     <td><strong>{r.score}</strong>/100</td>
                     <td>
                       <Badge variant={r.grade === 'A' ? 'gold' : r.grade === 'B' ? 'navy' : r.grade === 'F' ? 'danger' : 'sky'}>

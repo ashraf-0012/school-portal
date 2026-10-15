@@ -5,6 +5,7 @@ from datetime import timedelta
 from dotenv import load_dotenv
 
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 
 from flask_jwt_extended import (
@@ -14,13 +15,45 @@ from flask_jwt_extended import (
     get_jwt_identity
 )
 
-# Create the Flask application
-app = Flask(__name__)
-
 # Load environment variables from the .env file
 load_dotenv()
 
-# Get the JWT secret from .env instead of hardcoding it here
+# Create the Flask application
+app = Flask(__name__)
+
+
+# ==========================================
+# CORS CONFIGURATION
+# ==========================================
+
+# Allow requests from the local React frontend
+allowed_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+# Allow requests from the deployed Vercel frontend
+frontend_url = os.getenv("FRONTEND_URL")
+
+if frontend_url:
+    allowed_origins.append(frontend_url.rstrip("/"))
+
+# Apply CORS to API endpoints only
+CORS(
+    app,
+    resources={
+        r"/api/*": {
+            "origins": allowed_origins
+        }
+    }
+)
+
+
+# ==========================================
+# JWT AUTHENTICATION CONFIGURATION
+# ==========================================
+
+# Get the JWT secret from environment variables
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 
 # Stop the application if the JWT secret is missing
@@ -30,13 +63,40 @@ if not app.config["JWT_SECRET_KEY"]:
 # Set access tokens to expire after 15 minutes
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=15)
 
-# Initialize JWT authentication for our Flask application
+# Initialize JWT authentication
 jwt = JWTManager(app)
 
-# Configure SQLite as the database for our school portal
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///school.db"
 
-# Initialize SQLAlchemy so Flask can work with the database
+# ==========================================
+# DATABASE CONFIGURATION
+# ==========================================
+
+# Get the PostgreSQL connection string from environment variables
+database_url = os.getenv("DATABASE_URL")
+
+# Stop the application if the database URL is missing
+if not database_url:
+    raise RuntimeError("DATABASE_URL is missing from the .env file")
+
+# Convert PostgreSQL URLs to use the psycopg driver
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace(
+        "postgres://",
+        "postgresql+psycopg://",
+        1
+    )
+
+elif database_url.startswith("postgresql://"):
+    database_url = database_url.replace(
+        "postgresql://",
+        "postgresql+psycopg://",
+        1
+    )
+
+# Configure SQLAlchemy
+app.config["SQLALCHEMY_DATABASE_URI"] = database_url
+
+# Initialize SQLAlchemy
 db = SQLAlchemy(app)
 
 

@@ -1,4 +1,4 @@
-const API_BASE = '/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 async function request(endpoint, options = {}) {
   const token = localStorage.getItem('school_portal_token');
@@ -19,7 +19,6 @@ async function request(endpoint, options = {}) {
     });
 
     const contentType = response.headers.get('content-type');
-
     let data = null;
 
     if (contentType && contentType.includes('application/json')) {
@@ -72,14 +71,12 @@ export const api = {
     });
   },
 
-  // Authenticated user's information
   getCurrentUser() {
     return request('/me', {
       method: 'GET',
     });
   },
 
-  // Protected routes
   getProtected() {
     return request('/protected', {
       method: 'GET',
@@ -112,6 +109,12 @@ export const api = {
     });
   },
 
+  deleteUser(id) {
+    return request(`/users/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
   // Students
   getStudents() {
     return request('/students', {
@@ -123,6 +126,12 @@ export const api = {
     return request('/students', {
       method: 'POST',
       body: JSON.stringify(studentData),
+    });
+  },
+
+  deleteStudent(id) {
+    return request(`/students/${id}`, {
+      method: 'DELETE',
     });
   },
 
@@ -140,6 +149,12 @@ export const api = {
     });
   },
 
+  deleteClass(id) {
+    return request(`/classes/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
   // Teachers
   getTeachers() {
     return request('/teachers', {
@@ -151,6 +166,12 @@ export const api = {
     return request('/teachers', {
       method: 'POST',
       body: JSON.stringify(teacherData),
+    });
+  },
+
+  deleteTeacher(id) {
+    return request(`/teachers/${id}`, {
+      method: 'DELETE',
     });
   },
 
@@ -168,6 +189,12 @@ export const api = {
     });
   },
 
+  deleteSubject(id) {
+    return request(`/subjects/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
   // Teaching assignments
   getTeachingAssignments() {
     return request('/teaching-assignments', {
@@ -179,6 +206,12 @@ export const api = {
     return request('/teaching-assignments', {
       method: 'POST',
       body: JSON.stringify(assignmentData),
+    });
+  },
+
+  deleteTeachingAssignment(id) {
+    return request(`/teaching-assignments/${id}`, {
+      method: 'DELETE',
     });
   },
 
@@ -196,6 +229,12 @@ export const api = {
     });
   },
 
+  deleteAcademicSession(id) {
+    return request(`/academic-sessions/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
   // Results
   getResults() {
     return request('/results', {
@@ -207,6 +246,12 @@ export const api = {
     return request('/results', {
       method: 'POST',
       body: JSON.stringify(resultData),
+    });
+  },
+
+  deleteResult(id) {
+    return request(`/results/${id}`, {
+      method: 'DELETE',
     });
   },
 };
